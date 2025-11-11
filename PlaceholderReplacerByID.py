@@ -26,12 +26,16 @@ class PlaceholderReplacerByID:
                 "prompt_list": ("STRING", {"forceInput": True}),
 
                 # Lines "1_artistName"
-                "string_list": ("STRING", {"forceInput": True}),
+                "term_mappings": ("STRING", {"forceInput": True}),
 
                 # Behavior toggles
                 "mirror_first_prompt": ("BOOLEAN", {"default": False, "label": "Mirror First Prompt Across All"}),
                 "auto_step_ids": ("BOOLEAN", {"default": False, "label": "Auto-Step IDs"}),
                 "manual_ids": ("BOOLEAN", {"default": False, "label": "Use Manual IDs"}),
+                
+                "mirror_first_id": ("BOOLEAN", {
+                "default": False,
+                "label": "Mirror First ID Across All"}),
 
                 # Manual override: delimited list of IDs
                 "manual_ids_list": ("STRING", {"forceInput": True}),
@@ -97,7 +101,7 @@ class PlaceholderReplacerByID:
                 out.append(int(p))
         return out
 
-    # Literal placeholder replacement
+    # Literal placeholder replacement (UPDATED FOR SAFE HANDLING OF INVALID IDs)
     def resolve_string(self, num_list, template, artist_map, placeholder_token):
         if not template:
             return template
@@ -106,18 +110,40 @@ class PlaceholderReplacerByID:
 
         if num_list and len(num_list) > 0:
             first_id = num_list[0]
-            replacement = artist_map.get(first_id, "")
+            # Check if first_id is a valid integer; if not (e.g., "NOT_FOUND"), use "NOT_FOUND" as replacement
+            try:
+                int_id = int(first_id)
+                replacement = artist_map.get(int_id, "")
+            except (ValueError, TypeError):
+                replacement = "NOT_FOUND"
         else:
             replacement = ""
 
         # literal replace only
         return template.replace(placeholder_token, replacement)
 
+    def mirror_first_id_across_slots(self, id_lists, enable):
+        if not enable:
+            return id_lists
+
+        if not id_lists or not id_lists[0]:
+            return id_lists
+
+        first_id = id_lists[0][0]
+
+        for i in range(1, len(id_lists)):
+            if id_lists[i]:
+                id_lists[i][0] = first_id
+            else:
+                id_lists[i] = [first_id]
+
+        return id_lists
+
     # -------------------------
     # Main
     # -------------------------
-    def process(self, id_sequences, prompt_list, string_list,
-                mirror_first_prompt, auto_step_ids, manual_ids,
+    def process(self, id_sequences, prompt_list, term_mappings,
+                mirror_first_prompt, auto_step_ids, manual_ids, mirror_first_id,
                 manual_ids_list, increment_base,
                 placeholder_token, prompt_delimiter):
 
@@ -130,7 +156,12 @@ class PlaceholderReplacerByID:
         # -----------------------------
         # ID SEQUENCES (single INT_LIST, split into slots)
         # -----------------------------
-        seq = self.parse_list(id_sequences)  # Ensure it's a list of ints
+        seq = self.parse_list(id_sequences)
+        while len(seq) < num_slots:
+            seq.append(None)
+
+        # Build id_lists slot-by-slot
+        seq = self.parse_list(id_sequences)
         while len(seq) < num_slots:
             seq.append(None)
 
@@ -138,11 +169,16 @@ class PlaceholderReplacerByID:
         for i in range(num_slots):
             id_lists.append([seq[i]] if seq[i] is not None else [])
 
+        id_lists = self.mirror_first_id_across_slots(id_lists, mirror_first_id)
+
+        # Apply mirror-first-ID logic AFTER id_lists is created
+        id_lists = self.mirror_first_id_across_slots(id_lists, mirror_first_id)
+        
         # -----------------------------
         # Artist map
         # -----------------------------
         artist_map = {}
-        for line in (string_list or "").splitlines():
+        for line in (term_mappings or "").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -179,13 +215,19 @@ class PlaceholderReplacerByID:
             str_parts = [first_str] * num_slots
 
         # -----------------------------
-        # Manual IDs override
+        # Manual IDs override (SAFE VERSION with literal NOT_FOUND)
         # -----------------------------
         forced_vals = self.parse_manual_ids(manual_ids_list)
-        if manual_ids and len(forced_vals) >= num_slots:
+
+        if manual_ids:
             for i in range(num_slots):
-                id_lists[i] = [forced_vals[i]] + id_lists[i][1:]
-            debug_log.append("manual_ids override applied.")
+                if i < len(forced_vals):
+                    # Use provided ID
+                    id_lists[i] = [forced_vals[i]]
+                else:
+                    # Explicitly store literal NOT_FOUND
+                    id_lists[i] = ["NOT_FOUND"]
+            debug_log.append("SAFE manual_ids override applied (literal NOT_FOUND).")
 
         # -----------------------------
         # Resolve templates (literal placeholder)
@@ -198,16 +240,18 @@ class PlaceholderReplacerByID:
         joined = ";;;;;".join(all_results)
 
         # -----------------------------
-        # Primary ID names
+        # Primary ID names (SAFE VERSION)
         # -----------------------------
         primary_ids = []
         for lst in id_lists:
-            if lst and len(lst) > 0:
-                val = lst[0]
-                name = artist_map.get(int(val), "NOT FOUND")
+            # lst is always a list like [id] or ["NOT_FOUND"]
+            if lst and lst[0] != "NOT_FOUND":
+                val = lst[0]  # integer
+                name = artist_map.get(int(val), "NOT_FOUND")
                 primary_ids.append(f"{val}_{name}")
             else:
-                primary_ids.append("NOT FOUND")
+                # Literal NOT_FOUND when missing or invalid
+                primary_ids.append("NOT_FOUND")
 
         return (joined, "\n".join(debug_log), ";".join(primary_ids))
 
