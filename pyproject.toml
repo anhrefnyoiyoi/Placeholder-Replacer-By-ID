@@ -28,7 +28,7 @@ Documentation = "https://github.com/anhrefnyoiyoi/Placeholder-Replacer-By-ID/wik
 "Bug Tracker" = "https://github.com/anhrefnyoiyoi/Placeholder-Replacer-By-ID/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "anhrefnyoiyoi"
 DisplayName = "Placeholder-Replacer-By-ID"
 Icon = ""
 includes = [] 
